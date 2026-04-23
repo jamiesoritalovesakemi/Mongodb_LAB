@@ -1,0 +1,105 @@
+// --- Step 1: Start MongoDB server ---
+// Run this in your terminal before connecting to mongosh:
+// mongod --dbpath /data/db
+
+// --- Step 2: Connect to MongoDB ---
+mongosh
+
+// --- Step 3: Create database and collections ---
+use testdb
+db.createCollection("accounts")
+db.createCollection("transactions")
+
+// --- Step 4: Insert sample data ---
+db.accounts.insertMany([
+  { _id: 1, name: "Alice", balance: 100 },
+  { _id: 2, name: "Bob", balance: 50 }
+])
+
+// --- Step 5: Simulate a simple transfer without transactions ---
+print("=== Simple transfer without transaction ===");
+db.accounts.updateOne({ _id: 1 }, { $inc: { balance: -20 } });
+db.accounts.updateOne({ _id: 2 }, { $inc: { balance: 20 } });
+
+// --- Step 6: Simulate failure scenario ---
+print("=== Simulate failure between updates ===");
+try {
+  // Withdraw from Alice
+  db.accounts.updateOne({ _id: 1 }, { $inc: { balance: -20 } });
+  // Simulate failure
+  throw new Error("Simulated failure");
+  // Deposit to Bob (won't execute)
+  db.accounts.updateOne({ _id: 2 }, { $inc: { balance: 20 } });
+} catch (e) {
+  print("Error occurred: " + e);
+}
+
+// --- Step 7: Check balances after failure (no rollback) ---
+print("Balances after failed operation (no transaction):");
+db.accounts.find().pretty();
+
+// --- Step 8: Implement transaction for atomic transfer ---
+print("=== Transaction for atomic transfer ===");
+const session = db.getMongo().startSession();
+session.startTransaction();
+try {
+  const accounts = session.getDatabase("testdb").collection("accounts");
+  // Withdraw from Alice
+  accounts.updateOne({ _id: 1 }, { $inc: { balance: -20 } }, { session });
+  // Deposit to Bob
+  accounts.updateOne({ _id: 2 }, { $inc: { balance: 20 } }, { session });
+  // Commit transaction
+  await session.commitTransaction();
+  print("Transaction committed successfully");
+} catch (error) {
+  await session.abortTransaction();
+  print("Transaction aborted due to error: " + error);
+} finally {
+  session.endSession();
+}
+
+// --- Step 9: Check balances after transaction ---
+print("Balances after transaction:");
+db.accounts.find().pretty();
+
+// --- Step 10: Simulate failure within a transaction ---
+print("=== Transaction with simulated failure ===");
+const session2 = db.getMongo().startSession();
+session2.startTransaction();
+try {
+  const accounts = session2.getDatabase("testdb").collection("accounts");
+  // Withdraw from Alice
+  accounts.updateOne({ _id: 1 }, { $inc: { balance: -20 } }, { session: session2 });
+  // Simulate failure
+  throw new Error("Simulated failure");
+  // Deposit to Bob (not reached)
+  accounts.updateOne({ _id: 2 }, { $inc: { balance: 20 } }, { session: session2 });
+  await session2.commitTransaction();
+  print("Transaction committed successfully");
+} catch (error) {
+  await session2.abortTransaction();
+  print("Transaction aborted due to error: " + error);
+} finally {
+  session2.endSession();
+}
+
+// --- Step 11: Check balances after failed transaction ---
+print("Balances after aborted transaction:");
+db.accounts.find().pretty();
+
+// --- Step 12: Demonstrate write concern options ---
+print("=== Insert with different write concerns ===");
+db.inventory.insertOne(
+  { item: "notebook", qty: 25, status: "A" },
+  { writeConcern: { w: 1 } }
+);
+db.inventory.insertOne(
+  { item: "pencil", qty: 50, status: "B" },
+  { writeConcern: { w: "majority" } }
+);
+
+// --- Final: Verify total balance sum ---
+print("Final total balance in accounts:");
+db.accounts.aggregate([{ $group: { _id: null, total: { $sum: "$balance" } } }]);
+
+// --- End of script ---
